@@ -83,6 +83,7 @@ struct stream_s {
 	int64_t start_time_us;
 	unsigned int media_sdp_id;
 	unsigned int channel_slot;
+	tls_fwd_t *tls_fwd;
 };
 
 
@@ -109,7 +110,7 @@ struct tls_fwd_s {
 	SSL *ssl;
 	struct streambuf *stream;
 	struct poller poller;
-	ssrc_t *ssrc;
+	stream_t *stream1;
 	metafile_t *metafile;
 	unsigned int sent_intro:1;
 };
@@ -123,7 +124,6 @@ struct ssrc_s {
 	packet_sequencer_t sequencer;
 	decode_t *decoders[128];
 	output_t *output;
-	tls_fwd_t *tls_fwd;
 };
 
 

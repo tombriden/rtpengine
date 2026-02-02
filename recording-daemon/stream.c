@@ -12,6 +12,7 @@
 #include "packet.h"
 #include "forward.h"
 #include "recaux.h"
+#include "tls_send.h"
 
 
 #define MAXBUFLEN 65535
@@ -26,6 +27,8 @@
 
 // stream is locked
 void stream_close(stream_t *stream) {
+	if (stream->tls_fwd)
+		tls_fwd_free(&stream->tls_fwd);
 	if (stream->fd == -1)
 		return;
 	epoll_del(stream->fd);
@@ -106,6 +109,7 @@ static stream_t *stream_get(metafile_t *mf, unsigned long id) {
 	pthread_mutex_init(&ret->lock, NULL);
 	ret->fd = -1;
 	ret->id = id;
+	ret->tls_fwd = NULL;
 	ret->metafile = mf;
 	ret->tag = (unsigned long) -1;
 	ret->start_time_us = now_us();

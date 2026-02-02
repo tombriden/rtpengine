@@ -104,9 +104,9 @@ static int decoder_got_frame(decoder_t *dec, AVFrame *frame, void *sp, void *dp)
 	if (metafile->forwarding_on)
 		sink_add(&deco->tls_mix_sink, frame);
 
-	if (ssrc->tls_fwd) {
+	if (stream->tls_fwd) {
 		dbg("SSRC %lx of stream #%lu has TLS forwarding stream", ssrc->ssrc, stream->id);
-		if (!sink_add(&ssrc->tls_fwd->sink, frame))
+		if (!sink_add(&stream->tls_fwd->sink, frame))
 			ilog(LOG_ERR, "Failed to add decoded packet to TLS/TCP forward output");
 
 	}

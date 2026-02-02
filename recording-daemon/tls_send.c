@@ -263,12 +263,12 @@ static bool tls_fwd_add(sink_t *sink, AVFrame *frame) {
 	}
 
 	if (!tls_fwd->sent_intro) {
-		ssrc_t *ssrc = tls_fwd->ssrc;
+		stream_t *stream = tls_fwd->stream1;
 		metafile_t *metafile = tls_fwd->metafile;
 		tag_t *tag = NULL;
 
-		if (ssrc && ssrc->stream)
-			tag = tag_get(metafile, ssrc->stream->tag);
+		if (stream)
+			tag = tag_get(metafile, stream->tag);
 
 		if (tag && tag->metadata) {
 			dbg("Writing tag metadata header to TLS");
@@ -334,13 +334,13 @@ bool tls_fwd_new(tls_fwd_t **tlsp) {
 
 void tls_fwd_init(stream_t *stream, metafile_t *mf, ssrc_t *ssrc) {
 	if ((!stream->forwarding_on && !mf->forwarding_on) || !tls_send_to_ep.port || tls_mixed) {
-		tls_fwd_free(&ssrc->tls_fwd);
+		tls_fwd_free(&stream->tls_fwd);
 		return;
 	}
 
-	if (!tls_fwd_new(&ssrc->tls_fwd))
+	if (!tls_fwd_new(&stream->tls_fwd))
 		return;
 
-	ssrc->tls_fwd->ssrc = ssrc;
-	ssrc->tls_fwd->metafile = mf;
+	stream->tls_fwd->stream1 = stream;
+	stream->tls_fwd->metafile = mf;
 }
