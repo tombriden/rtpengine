@@ -208,6 +208,12 @@ static void tls_fwd_state(tls_fwd_t *tls_fwd) {
 static void tls_fwd_silence_frames_upto(tls_fwd_t *tls_fwd, AVFrame *frame, int64_t upto) {
 	unsigned int silence_samples = tls_fwd->format.clockrate / 100;
 
+	if (G_UNLIKELY(tls_fwd->in_pts == 0 && upto > 0)) {
+		dbg("snapping TLS forward in_pts to %llu", (unsigned long long) upto);
+		tls_fwd->in_pts = upto;
+		return;
+	}
+
 	while (tls_fwd->in_pts < upto) {
 		if (G_UNLIKELY(upto - tls_fwd->in_pts > tls_fwd->format.clockrate * 30)) {
 			ilog(LOG_WARN, "More than 30 seconds of silence needed to fill mix buffer, resetting");
@@ -241,7 +247,7 @@ static void tls_fwd_silence_frames_upto(tls_fwd_t *tls_fwd, AVFrame *frame, int6
 		DEF_CH_LAYOUT(&channel_layout, tls_fwd->format.channels);
 		tls_fwd->silence_frame->CH_LAYOUT = channel_layout;
 
-		int linesize = av_get_bytes_per_sample(frame->format) * tls_fwd->silence_frame->nb_samples;
+		int linesize = av_get_bytes_per_sample(frame->format) * tls_fwd->silence_frame->nb_samples * tls_fwd->format.channels;
 		dbg("Writing %u bytes PCM to TLS", linesize);
 		streambuf_write(tls_fwd->stream, (char *) tls_fwd->silence_frame->extended_data[0], linesize);
 	}
@@ -261,6 +267,8 @@ static bool tls_fwd_add(sink_t *sink, AVFrame *frame) {
 		av_frame_free(&frame);
 		return false;
 	}
+
+	fix_frame_channel_layout(frame);
 
 	if (!tls_fwd->sent_intro) {
 		ssrc_t *ssrc = tls_fwd->ssrc;
@@ -302,6 +310,10 @@ static bool tls_fwd_add(sink_t *sink, AVFrame *frame) {
 
 static bool tls_fwd_config(sink_t *sink, const format_t *requested_format, format_t *actual_format) {
 	tls_fwd_t *tls_fwd = *sink->tls_fwd;
+
+	if (requested_format->channels > 0)
+		sink->format.channels = requested_format->channels;
+
 	*actual_format = sink->format;
 	tls_fwd->format = sink->format;
 	return true;
@@ -326,7 +338,7 @@ bool tls_fwd_new(tls_fwd_t **tlsp) {
 
 	tls_fwd->sink.format.format = AV_SAMPLE_FMT_S16;
 	tls_fwd->sink.format.clockrate = tls_resample;
-	tls_fwd->sink.format.channels = 1;
+	tls_fwd->sink.format.channels = -1;
 
 	return true;
 }

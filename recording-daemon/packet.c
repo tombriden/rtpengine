@@ -20,6 +20,7 @@
 #include "fix_frame_channel_layout.h"
 #include "tls_send.h"
 #include "mix.h"
+#include "stream.h"
 
 
 static void packet_free(void *p) {
@@ -127,8 +128,37 @@ static void packet_decode(ssrc_t *ssrc, packet_t *packet) {
 
 		mix_sink_init(&ssrc->decoders[payload_type]->mix_sink, ssrc, &mf->mix,
 				resample_audio);
-		mix_sink_init(&ssrc->decoders[payload_type]->tls_mix_sink, ssrc, &mf->tls_mix,
-				tls_resample);
+		
+		// Connect to stream mixer if file stereo mode is active
+		stream_t *stream = ssrc->stream;
+		if (mix_method == MM_STEREO) {
+			stream_mix_init(stream, mf);
+			if (stream->stream_mix) {
+				dbg("Connecting SSRC %lx to stream #%lu file mix sink", ssrc->ssrc, stream->id);
+				mix_sink_init(&ssrc->decoders[payload_type]->mix_sink, ssrc, 
+				              &stream->stream_mix, resample_audio);
+			}
+		}
+		
+		// Initialize TLS mix sink - connect to stream mixer in stereo mode
+		if (mix_method == MM_STEREO) {
+			// Ensure stream mixer is initialized before connecting
+			stream_mix_init(stream, mf);
+			
+			if (stream->stream_mix) {
+				dbg("Connecting SSRC %lx to stream #%lu mixer", ssrc->ssrc, stream->id);
+				mix_sink_init(&ssrc->decoders[payload_type]->tls_mix_sink, ssrc, 
+				              &stream->stream_mix, tls_resample);
+			} else {
+				ilog(LOG_ERR, "Failed to initialize stream mixer for stream #%lu, fallback to global", stream->id);
+				mix_sink_init(&ssrc->decoders[payload_type]->tls_mix_sink, ssrc, 
+				              &mf->tls_mix, tls_resample);
+			}
+		} else {
+			dbg("Connecting SSRC %lx directly to global TLS mixer", ssrc->ssrc);
+			mix_sink_init(&ssrc->decoders[payload_type]->tls_mix_sink, ssrc, 
+			              &mf->tls_mix, tls_resample);
+		}
 	}
 
 	if (decoder_input(ssrc->decoders[payload_type], &packet->payload, ntohl(packet->rtp->timestamp),

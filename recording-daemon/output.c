@@ -82,6 +82,55 @@ bool sink_add(sink_t *sink, AVFrame *frame) {
 }
 
 
+static bool mux_sink_add(sink_t *sink, AVFrame *frame) {
+	mux_sink_t *mux = sink->mux;
+	bool ret = true;
+
+	for (int i = 0; i < mux->num_sinks; i++) {
+		// Clone frame for all but the last sink
+		AVFrame *f = (i == mux->num_sinks - 1) ? frame : av_frame_clone(frame);
+		if (!sink_add(mux->sinks[i], f))
+			ret = false;
+	}
+
+	if (mux->num_sinks == 0)
+		av_frame_free(&frame);
+
+	return ret;
+}
+
+
+static bool mux_sink_config(sink_t *sink, const format_t *requested_format, format_t *actual_format) {
+	mux_sink_t *mux = sink->mux;
+	bool ret = false;
+
+	// We take the actual format from the first successful sink config
+	for (int i = 0; i < mux->num_sinks; i++) {
+		format_t fmt;
+		if (mux->sinks[i]->config(mux->sinks[i], requested_format, &fmt)) {
+			if (!ret) {
+				*actual_format = fmt;
+				ret = true;
+			}
+		}
+	}
+
+	if (!ret)
+		*actual_format = *requested_format;
+
+	return ret;
+}
+
+
+void mux_sink_init(mux_sink_t *mux) {
+	sink_init(&mux->sink);
+	mux->sink.mux = mux;
+	mux->sink.add = mux_sink_add;
+	mux->sink.config = mux_sink_config;
+	mux->num_sinks = 0;
+}
+
+
 static bool output_add(sink_t *sink, AVFrame *frame) {
 	bool ret = false;
 

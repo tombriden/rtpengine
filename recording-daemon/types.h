@@ -40,6 +40,8 @@ typedef struct content_s content_t;
 typedef struct notif_action_s notif_action_t;
 typedef struct notif_req_s notif_req_t;
 
+typedef struct mux_sink_s mux_sink_t;
+
 typedef void handler_func(handler_t *);
 
 
@@ -57,6 +59,7 @@ struct sink_s {
 		output_t *output;
 		ssrc_t *ssrc;
 		tls_fwd_t **tls_fwd;
+		mux_sink_t *mux;
 	};
 	union {
 		mix_t **mix;
@@ -68,6 +71,13 @@ struct sink_s {
 	union {
 		unsigned int mixer_idx;
 	};
+};
+
+
+struct mux_sink_s {
+	sink_t sink;
+	sink_t *sinks[2];
+	int num_sinks;
 };
 
 
@@ -83,6 +93,11 @@ struct stream_s {
 	int64_t start_time_us;
 	unsigned int media_sdp_id;
 	unsigned int channel_slot;
+
+	// Per-stream mixer for TLS/File mixed stereo mode
+	pthread_mutex_t stream_mix_lock;
+	mix_t *stream_mix;
+	sink_t *stream_mix_out_sink;
 };
 
 

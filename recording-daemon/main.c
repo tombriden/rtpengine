@@ -224,7 +224,7 @@ static void options(int *argc, char ***argv) {
 		{ "resample-to",	0,   0, G_OPTION_ARG_INT,	&resample_audio,"Resample all output audio",		"INT"		},
 		{ "mp3-bitrate",	0,   0, G_OPTION_ARG_INT,	&mp3_bitrate,	"Bits per second for MP3 encoding",	"INT"		},
 		{ "output-mixed",	0,   0, G_OPTION_ARG_NONE,	&output_mixed,	"Mix participating sources into a single output",NULL	},
-		{ "mix-method",		0,   0, G_OPTION_ARG_STRING,	&mix_method_str,"How to mix multiple sources",		"direct|channels"},
+		{ "mix-method",		0,   0, G_OPTION_ARG_STRING,	&mix_method_str,"How to mix multiple sources",		"direct|channels|stereo"},
 		{ "mix-num-inputs",	0,   0, G_OPTION_ARG_INT,	&mix_num_inputs, "Number of channels for recordings",	"INT"		},
 		{ "output-single",	0,   0, G_OPTION_ARG_NONE,	&output_single,	"Create one output file for each source",NULL		},
 		{ "output-chmod",	0,   0, G_OPTION_ARG_STRING,	&chmod_mode,	"File mode for recordings",		"OCTAL"		},
@@ -400,6 +400,10 @@ static void options(int *argc, char ***argv) {
 		mix_method = MM_DIRECT;
 	else if (!strcmp(mix_method_str, "channels"))
 		mix_method = MM_CHANNELS;
+	else if (!strcmp(mix_method_str, "stereo")) {
+		mix_method = MM_STEREO;
+		output_mixed = true;
+	}
 	else
 		die("Invalid 'mix-method' option");
 

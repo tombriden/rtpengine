@@ -108,7 +108,22 @@ static void meta_mix_file_output(metafile_t *mf) {
 
 	if (!mf->mix) {
 		mf->mix_out = output_new_ext(mf, "mix", "mixed", "mix");
-		mf->mix = mix_new(&mf->mix_lock, &mf->mix_out->sink, mf->media_rec_slots);
+		
+		if (mix_method == MM_STEREO) {
+			// Stereo mode: 2 channels (L+R) using MM_CHANNELS (amerge)
+			dbg("Initializing file mixed stereo mode with 2 channels");
+			mf->mix = mix_new_method(&mf->mix_lock, &mf->mix_out->sink, 2, MM_CHANNELS);
+			
+			// Initialize per-stream mixers
+			for (int i = 0; i < mf->streams->len; i++) {
+				stream_t *stream = g_ptr_array_index(mf->streams, i);
+				if (!stream)
+					continue;
+				stream_mix_init(stream, mf);
+			}
+		} else {
+			mf->mix = mix_new(&mf->mix_lock, &mf->mix_out->sink, mf->media_rec_slots);
+		}
 	}
 
 	db_do_stream(mf, mf->mix_out, NULL, 0);
@@ -135,10 +150,35 @@ static void meta_mix_tls_output(metafile_t *mf) {
 
 	if (!tls_fwd_new(&mf->mix_tls_fwd))
 		return;
-	if (mix_method == MM_CHANNELS)
-		mf->mix_tls_fwd->sink.format.channels = mix_num_inputs;
-	if (!mf->tls_mix)
-		mf->tls_mix = mix_new(&mf->mix_lock, &mf->mix_tls_fwd->sink, mf->media_rec_slots);
+	
+	if (mix_method == MM_STEREO) {
+		// Stereo mode: 2 channels (L+R) using MM_CHANNELS (amerge)
+		dbg("Initializing TLS mixed stereo mode with 2 channels");
+		if (mf->tls_mix) {
+			// In stereo mode we MUST use MM_CHANNELS and exactly 2 inputs
+			// If it was created differently, recreate it
+			mix_destroy(mf->tls_mix);
+			mf->tls_mix = NULL;
+		}
+		
+		mf->mix_tls_fwd->sink.format.channels = 2;
+		if (!mf->tls_mix)
+			mf->tls_mix = mix_new_method(&mf->mix_lock, &mf->mix_tls_fwd->sink, 2, MM_CHANNELS);
+		
+		// Initialize per-stream mixers
+		for (int i = 0; i < mf->streams->len; i++) {
+			stream_t *stream = g_ptr_array_index(mf->streams, i);
+			if (!stream)
+				continue;
+			stream_mix_init(stream, mf);
+		}
+	} else {
+		// Original multi-channel mode
+		if (mix_method == MM_CHANNELS)
+			mf->mix_tls_fwd->sink.format.channels = mix_num_inputs;
+		if (!mf->tls_mix)
+			mf->tls_mix = mix_new(&mf->mix_lock, &mf->mix_tls_fwd->sink, mf->media_rec_slots);
+	}
 
 	mf->mix_tls_fwd->metafile = mf;
 }

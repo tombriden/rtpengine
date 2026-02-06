@@ -18,6 +18,7 @@ void output_content_failure(content_t *);
 
 void sink_init(sink_t *);
 void sink_close(sink_t *sink);
+void mux_sink_init(mux_sink_t *mux);
 
 bool sink_add(sink_t *, AVFrame *frame);
 

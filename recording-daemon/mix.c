@@ -33,6 +33,7 @@ struct mix_s {
 	AVFilterContext *sink_ctx;
 	unsigned int next_idx[MIX_MAX_INPUTS]; //slots can never exceed MIN_MAX_INPUTS by definition
 	unsigned int channel_slots;
+	unsigned int num_inputs; // Actual number of inputs for this mixer
 	AVFrame *sink_frame;
 
 	resample_t resample;
@@ -42,6 +43,8 @@ struct mix_s {
 	sink_t *sink;
 
 	AVFrame *silence_frame;
+	
+	enum mix_method method; // Mixing method for this mixer
 };
 
 
@@ -54,7 +57,7 @@ static void mix_shutdown(mix_t *mix) {
 		avfilter_free(mix->sink_ctx);
 	mix->sink_ctx = NULL;
 
-	for (unsigned int i = 0; i < mix_num_inputs; i++) {
+	for (unsigned int i = 0; i < mix->num_inputs; i++) {
 		if (mix->src_ctxs[i])
 			avfilter_free(mix->src_ctxs[i]);
 		mix->src_ctxs[i] = NULL;
@@ -81,11 +84,11 @@ void mix_set_channel_slots(mix_t *mix, unsigned int channel_slots) {
 	if(!mix)
 		return;
 
-	if(channel_slots > mix_num_inputs) {
-		ilog(LOG_ERR, "channel_slots specified %u is higher than the maximum available %u", channel_slots, mix_num_inputs);
+	if(channel_slots > mix->num_inputs) {
+		ilog(LOG_ERR, "channel_slots specified %u is higher than the maximum available %u", channel_slots, mix->num_inputs);
 	}
 	//ensures that mix->channel_slots will always be within the range of 1 to mix_max_inputs
-	mix->channel_slots = channel_slots < 1 ? 1 : (channel_slots > mix_num_inputs ? mix_num_inputs : channel_slots);
+	mix->channel_slots = channel_slots < 1 ? 1 : (channel_slots > mix->num_inputs ? mix->num_inputs : channel_slots);
 	ilog(LOG_DEBUG, "setting slots %i", mix->channel_slots);
 }
 
@@ -103,8 +106,8 @@ unsigned int mix_get_index(mix_t *mix, void *ptr, unsigned int media_sdp_id, uns
 
 	if (mix_output_per_media) {
 		next = media_sdp_id;
-		if (next >= mix_num_inputs) {
-			ilog(LOG_WARNING, "Error with mix_output_per_media sdp_label next %i is bigger than mix_num_inputs %i", next, mix_num_inputs );
+		if (next >= mix->num_inputs) {
+			ilog(LOG_WARNING, "Error with mix_output_per_media sdp_label next %i is bigger than num_inputs %i", next, mix->num_inputs);
 		}
 	} else {
 		ilog(LOG_DEBUG, "getting mix input index for slot %u. channel slots for this mix are %u", stream_channel_slot, mix->channel_slots);
@@ -113,7 +116,7 @@ unsigned int mix_get_index(mix_t *mix, void *ptr, unsigned int media_sdp_id, uns
 		ilog(LOG_DEBUG, "mix input index chosen is #%u", next);
 	}
 
-	if (next < mix_num_inputs) {
+	if (next < mix->num_inputs) {
 		// must be unused
 		mix->input_ref[next] = ptr;
 		return next;
@@ -124,7 +127,7 @@ unsigned int mix_get_index(mix_t *mix, void *ptr, unsigned int media_sdp_id, uns
 	// too many inputs - find one to re-use
 	int64_t earliest = 0;
 	next = 0;
-	for (unsigned int i = 0; i < mix_num_inputs; i++) {
+	for (unsigned int i = 0; i < mix->num_inputs; i++) {
 		if ((earliest == 0 || earliest > mix->last_use[i]) &&
 				i % mix->channel_slots == stream_channel_slot) {
 			next = i;
@@ -162,14 +165,14 @@ static int mix_config_(mix_t *mix, const format_t *format) {
 	// amix
 	err = "no amix/amerge filter available";
 	const AVFilter *flt = NULL;
-	if (mix_method == MM_DIRECT)
+	if (mix->method == MM_DIRECT)
 		flt = avfilter_get_by_name("amix");
-	else if (mix_method == MM_CHANNELS)
+	else if (mix->method == MM_CHANNELS)
 		flt = avfilter_get_by_name("amerge");
 	if (!flt)
 		goto err;
 
-	snprintf(args, sizeof(args), "inputs=%lu", (unsigned long) mix_num_inputs);
+	snprintf(args, sizeof(args), "inputs=%lu", (unsigned long) mix->num_inputs);
 	err = "failed to create amix/amerge filter context";
 	if (avfilter_graph_create_filter(&mix->amix_ctx, flt, NULL, args, NULL, mix->graph))
 		goto err;
@@ -182,14 +185,14 @@ static int mix_config_(mix_t *mix, const format_t *format) {
 
 	CH_LAYOUT_T channel_layout, ext_layout;
 	DEF_CH_LAYOUT(&channel_layout, mix->in_format.channels);
-	DEF_CH_LAYOUT(&ext_layout, mix->in_format.channels * mix_num_inputs);
+	DEF_CH_LAYOUT(&ext_layout, mix->in_format.channels * mix->num_inputs);
 
-	for (unsigned int i = 0; i < mix_num_inputs; i++) {
+	for (unsigned int i = 0; i < mix->num_inputs; i++) {
 		dbg("init input ctx %i", i);
 
 		CH_LAYOUT_T ch_layout = channel_layout;
 
-		if (mix_method == MM_CHANNELS) {
+		if (mix->method == MM_CHANNELS) {
 			uint64_t mask = 0;
 			for (int ch = 0; ch < mix->in_format.channels; ch++) {
 				mask |= CH_LAYOUT_EXTRACT_MASK(ext_layout,
@@ -228,6 +231,10 @@ static int mix_config_(mix_t *mix, const format_t *format) {
 	if (avfilter_graph_create_filter(&mix->sink_ctx, flt, NULL, NULL, NULL, mix->graph))
 		goto err;
 
+	// force packed S16 output so we don't have to deal with planar formats in sinks
+	static const enum AVSampleFormat formats[] = { AV_SAMPLE_FMT_S16, AV_SAMPLE_FMT_NONE };
+	av_opt_set_int_list(mix->sink_ctx, "sample_fmts", formats, AV_SAMPLE_FMT_NONE, AV_OPT_SEARCH_CHILDREN);
+
 	err = "failed to link amix to abuffersink";
 	if (avfilter_link(mix->amix_ctx, 0, mix->sink_ctx, 0))
 		goto err;
@@ -239,6 +246,10 @@ static int mix_config_(mix_t *mix, const format_t *format) {
 		goto err;
 
 	mix->out_format = mix->in_format;
+	if (mix->method == MM_CHANNELS) {
+		mix->out_format.channels *= mix->num_inputs;
+		ilog(LOG_DEBUG, "Mixer output configured for %u channels (amerge)", mix->out_format.channels);
+	}
 
 	return 0;
 
@@ -256,11 +267,13 @@ mix_t *mix_new(pthread_mutex_t *lock, sink_t *sink, unsigned int media_rec_slots
 	mix->sink_frame = av_frame_alloc();
 	mix->lock = lock;
 	mix->sink = sink;
+	mix->method = mix_method; // Use global mix method by default
+	mix->num_inputs = mix_num_inputs; // Use global by default
 
-	for (unsigned int i = 0; i < mix_num_inputs; i++)
+	for (unsigned int i = 0; i < MIX_MAX_INPUTS; i++)
 		mix->pts_offs[i] = (uint64_t) -1LL;
 
-	for (unsigned int i = 0; i < mix_num_inputs; i++) {
+	for (unsigned int i = 0; i < MIX_MAX_INPUTS; i++) {
 		// initialise with the first mixer channel to use for each slot. This is set to mix_num_inputs+1
 		// so that we can detect first use and also if the maximum use has been reached.
 		//mix->next_idx[i] = mix_num_inputs+1;
@@ -273,8 +286,23 @@ mix_t *mix_new(pthread_mutex_t *lock, sink_t *sink, unsigned int media_rec_slots
 }
 
 
+mix_t *mix_new_method(pthread_mutex_t *lock, sink_t *sink, unsigned int media_rec_slots, 
+                      enum mix_method method) {
+	mix_t *mix = mix_new(lock, sink, media_rec_slots);
+	mix->method = method; // Override with specified method
+	mix->num_inputs = media_rec_slots; // Use media_rec_slots as num_inputs for custom mixers
+	return mix;
+}
+
+
 static void mix_silence_fill_idx_upto(mix_t *mix, unsigned int idx, uint64_t upto) {
 	unsigned int silence_samples = mix->in_format.clockrate / 100;
+
+	if (G_UNLIKELY(mix->in_pts[idx] == 0 && upto > 0)) {
+		dbg("snapping input %i in_pts to %llu", idx, (unsigned long long) upto);
+		mix->in_pts[idx] = upto;
+		return;
+	}
 
 	while (mix->in_pts[idx] < upto) {
 		if (G_UNLIKELY(upto - mix->in_pts[idx] > mix->in_format.clockrate * 30)) {
@@ -315,14 +343,17 @@ static void mix_silence_fill_idx_upto(mix_t *mix, unsigned int idx, uint64_t upt
 
 
 static void mix_silence_fill(mix_t *mix) {
-	if (mix->out_pts < mix->in_format.clockrate)
+	uint64_t delay = mix->in_format.clockrate / 2;
+	if (mix->out_pts < delay)
 		return;
 
-	for (unsigned int i = 0; i < mix_num_inputs; i++) {
+	uint64_t upto = mix->out_pts - delay;
+
+	for (unsigned int i = 0; i < mix->num_inputs; i++) {
 		// check the pts of each input and give them max 0.5 second of delay.
 		// if they fall behind too much, fill input with silence. otherwise
 		// output stalls and won't produce media
-		mix_silence_fill_idx_upto(mix, i, mix->out_pts - mix->in_format.clockrate / 2);
+		mix_silence_fill_idx_upto(mix, i, upto);
 	}
 }
 
@@ -331,7 +362,7 @@ static int mix_add_(mix_t *mix, AVFrame *frame, unsigned int idx, void *ptr) {
 	const char *err;
 
 	err = "index out of range";
-	if (idx >= mix_num_inputs)
+	if (idx >= mix->num_inputs)
 		goto err;
 
 	err = "mixer not initialized";
@@ -392,6 +423,16 @@ static int mix_add_(mix_t *mix, AVFrame *frame, unsigned int idx, void *ptr) {
 			else
 				goto err;
 		}
+
+		DEF_CH_LAYOUT(&mix->sink_frame->CH_LAYOUT, mix->out_format.channels);
+		mix->sink_frame->sample_rate = mix->out_format.clockrate;
+		mix->sink_frame->linesize[0] = av_get_bytes_per_sample(mix->sink_frame->format) * 
+		                               mix->sink_frame->nb_samples * mix->out_format.channels;
+
+		dbg("Mixer produced frame: channels=%d, layout=0x%" PRIx64 ", pts=%lld", 
+		    GET_CHANNELS(mix->sink_frame), (uint64_t) CH_LAYOUT_MASK(&mix->sink_frame->CH_LAYOUT),
+		    (long long) mix->sink_frame->pts);
+
 		bool ok = sink_add(mix->sink, mix->sink_frame);
 
 		av_frame_unref(mix->sink_frame);
@@ -444,21 +485,27 @@ bool mix_config(sink_t *sink, const format_t *requested_format, format_t *actual
 	if (!mix->sink)
 		return false;
 
-	stream_t *stream = ssrc->stream;
-
-	if (G_UNLIKELY(sink->mixer_idx == -1u))
+	// For stream mixer output sinks, mixer_idx is pre-assigned
+	if (G_UNLIKELY(sink->mixer_idx == -1u)) {
+		if (!ssrc) {
+			// Stream mixer output - should have mixer_idx pre-assigned
+			ilog(LOG_ERR, "Stream mixer output sink missing mixer_idx");
+			return false;
+		}
+		stream_t *stream = ssrc->stream;
 		sink->mixer_idx = mix_get_index(mix, ssrc, stream->media_sdp_id, stream->channel_slot);
+	}
 
 	if (mix->in_format.format == -1) {
 		format_t req_fmt = *requested_format;
-		if (mix_method == MM_CHANNELS)
-			req_fmt.channels *= mix_num_inputs;
+		if (mix->method == MM_CHANNELS)
+			req_fmt.channels *= mix->num_inputs;
 
 		if (!mix->sink->config(mix->sink, &req_fmt, actual_format))
 			return false;
 
-		if (mix_method == MM_CHANNELS && actual_format->channels % mix_num_inputs == 0)
-			actual_format->channels /= mix_num_inputs;
+		if (mix->method == MM_CHANNELS && actual_format->channels % mix->num_inputs == 0)
+			actual_format->channels /= mix->num_inputs;
 
 		mix_config_(mix, actual_format);
 	}
@@ -489,8 +536,12 @@ void mix_sink_init(sink_t *sink, ssrc_t *ssrc, mix_t **mixp, int resample) {
 	sink->mix = mixp;
 	sink->add = mix_add;
 	sink->config = mix_config;
-	if (mix_method == MM_CHANNELS)
+	// Check the mixer's method if available, otherwise use global
+	if (mixp && *mixp && (*mixp)->method == MM_CHANNELS)
 		sink->format.channels = 1;
+	else if (!mixp || !*mixp)
+		if (mix_method == MM_CHANNELS)
+			sink->format.channels = 1;
 	if (resample > 0)
 		sink->format.clockrate = resample;
 }

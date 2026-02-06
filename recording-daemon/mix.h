@@ -1,12 +1,14 @@
 #ifndef _MIX_H_
 #define _MIX_H_
 
+#include "main.h"
 #include "types.h"
 #include <libavutil/frame.h>
 
 #define MIX_MAX_INPUTS 4
 
 mix_t *mix_new(pthread_mutex_t *, sink_t *, unsigned int);
+mix_t *mix_new_method(pthread_mutex_t *, sink_t *, unsigned int, enum mix_method);
 void mix_destroy(mix_t *mix);
 void mix_close(mix_t *mix);
 void mix_set_channel_slots(mix_t *mix, unsigned int);

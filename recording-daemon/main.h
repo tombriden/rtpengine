@@ -22,6 +22,7 @@ enum output_storage_enum {
 enum mix_method {
 	MM_DIRECT = 0,
 	MM_CHANNELS,
+	MM_STEREO,
 };
 
 extern int ktable;

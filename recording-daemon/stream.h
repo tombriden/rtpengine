@@ -9,5 +9,7 @@ void stream_forwarding_on(metafile_t *mf, unsigned long id, unsigned int on);
 void stream_sdp_label(metafile_t *mf, unsigned long id, unsigned long *label);
 void stream_close(stream_t *stream);
 void stream_free(stream_t *stream);
+void stream_mix_init(stream_t *stream, metafile_t *mf);
+void stream_mix_free(stream_t *stream);
 
 #endif
